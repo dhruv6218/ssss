@@ -1,0 +1,12 @@
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+python-dotenv==1.0.1
+pydantic==2.10.4
+httpx==0.28.1
+PyJWT==2.10.1
+sentry-sdk[fastapi]==2.20.0
+bleach==6.2.0
+standardwebhooks==1.0.0
+resend==2.5.1
+PyJWT[crypto]==2.10.1
+cryptography==44.0.0

@@ -1,0 +1,68 @@
+{
+  "summary": "Comprehensive E2E frontend testing of ASTRIX AI completed against public preview URL. All 8 public pages render OK. Full auth + onboarding flow works (signup/login → step-1 workspace creation → step-3 sample seed → /app). After seeding, dashboard shows top opportunities (SAML SSO 34.5, API Rate Limits 25.2), 6 signals, 4 accounts, 2 problems, 2 ranked opportunities — all data correct. Settings tabs (Workspace, Areas, Segments, Team, Billing, Audit) all render. Billing tab shows Free plan + Quick Upgrade buttons. Pricing → Subscribe correctly generates LIVE Dodo checkout URL (https://checkout.dodopayments.com/4w8rdbEx). Logout/re-login persists workspace. CRITICAL ISSUE: Supabase schema is missing 'profiles' table or FK, causing repeated 400 PGRST200 errors when fetching decisions/artifacts/team-members with author info — currently masked by empty states but will break Decisions/Artifacts/Team views once records exist.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {
+        "flow": "Decisions list/detail",
+        "issue": "Supabase query 'decisions.select(*, profiles!author_id(full_name))' returns 400 PGRST200: Could not find a relationship between 'decisions' and 'profiles' in the schema cache. Hint: Perhaps you meant 'problems' instead of 'profiles'. Currently masked because workspace has 0 decisions, but creating any decision will cause hook to fail and list never populates.",
+        "affected_selectors": ["/app/decisions", "/app/decisions/:id"]
+      },
+      {
+        "flow": "Artifacts list/detail",
+        "issue": "Same PGRST200 error: 'artifacts.select(*, decisions(title), profiles!author_id(full_name))' fails. Hooks at /app/frontend/src/lib/api.ts:193,199 will return [] / null on real records.",
+        "affected_selectors": ["/app/artifacts", "/app/artifacts/:id"]
+      },
+      {
+        "flow": "Settings → Team tab member list",
+        "issue": "supabase.from('workspace_members').select('*, profiles(full_name, email, avatar_url)') at api.ts:288 will throw PGRST200 once invitations are accepted. Currently shows 'ACTIVE MEMBERS (0)' so silent.",
+        "affected_selectors": ["/app/settings (Team tab)"]
+      },
+      {
+        "flow": "Settings → Audit Log",
+        "issue": "Settings.tsx:36 query '*, profiles!user_id(full_name)' on activity_log will fail PGRST200 once any activity exists.",
+        "affected_selectors": ["/app/settings (Audit Log tab)"]
+      }
+    ],
+    "design_issues": [
+      {
+        "screen": "Sidebar logout",
+        "issues": ["Logout button (LogOut icon next to user email at bottom of sidebar) has no aria-label / data-testid making it hard to target. Suggest adding data-testid='sidebar-logout-btn' and aria-label='Sign out'."]
+      },
+      {
+        "screen": "Forms across the app",
+        "issues": ["Most form inputs and primary buttons lack data-testid attributes (Login email/password/submit, Signup form, Onboarding step inputs, Settings tab triggers). Only 2 data-testid found in entire /app/frontend/src/pages/. Recommend adding for testability."]
+      }
+    ]
+  },
+  "test_report_links": [
+    "/app/test_reports/iteration_2.json"
+  ],
+  "action_items": [
+    "CRITICAL: Either (a) create a public 'profiles' view/table in Supabase that mirrors auth.users (id, full_name, email, avatar_url) with a FK from decisions.author_id, artifacts.author_id, workspace_members.user_id, activity_log.user_id → profiles.id; OR (b) drop the 'profiles!author_id(full_name)' joins from /app/frontend/src/lib/api.ts (lines 171,177,184,193,199,288) and /app/frontend/src/pages/app/Settings.tsx (line 36) and resolve user names client-side from auth.users. Without this, Decisions/Artifacts/Team/Audit pages will silently fail once records exist.",
+    "MEDIUM: Add data-testid attributes to interactive elements (login form, signup form, onboarding inputs, settings tab triggers, sidebar logout, generate-memo button, send-assistant button) to improve test stability.",
+    "LOW: Sidebar logout button could be more discoverable — add aria-label and visible 'Sign Out' text on hover."
+  ],
+  "critical_code_review_comments": [
+    "/app/frontend/src/lib/api.ts has 6 occurrences of 'profiles!FK(full_name)' joins — these all 400 against current Supabase schema (no profiles table). This is silently broken because all empty states render fine.",
+    "/app/frontend/src/pages/app/Settings.tsx line 36 selects '*, profiles!user_id(full_name)' from activity_log — same PGRST200 issue.",
+    "AuthContext.signUp redirects to /onboarding/step-1 only if a session is created (i.e., email-confirm disabled in Supabase). If email-confirm is enabled in the dashboard, signup will silently set needsConfirmation=true with no UI feedback — the Signup component should surface this state to the user. Verified in this run: email-confirm is currently DISABLED so signup → step-1 works.",
+    "Onboarding Step 2 (Step2Data) auto-redirects to /app if workspace already created (skips step-3 unless visited directly) — the back-from-step-1-to-step-2 flow only works on first visit. Acceptable but worth documenting.",
+    "WorkspaceContext.fetchWorkspaces re-runs on every user change but does not memoize against multiple supabase calls; minor, not a bug."
+  ],
+  "updated_files": [],
+  "success_rate": {
+    "backend": "100% (verified in iteration_1)",
+    "frontend": "92% — 25 of 27 user flows verified end-to-end. 2 flows (decisions list with records, artifacts list with records) cannot be fully verified due to underlying PGRST200 schema issue but UI shells render."
+  },
+  "test_credentials": "test+ui1777195978@astrixai.app / TestPass123! (created via Supabase admin API with email_confirm=true). Workspace created: 'TEST_UI_Workspace'. Sample data seeded successfully.",
+  "seed_data_creation": "Seeded via UI flow: /onboarding/step-3 → click 'Explore with Sample Data' → click 'Enter Your Workspace' → /api/ai/seed-sample populates 4 accounts + 6 signals + 2 problems + 2 opportunities. Verified all visible in respective list pages.",
+  "retest_needed": true,
+  "main_agent_can_self_test": false,
+  "context_for_next_testing_agent": "Frontend is largely production-ready. All public pages, full auth flow, onboarding, dashboard, signals/accounts/problems/opportunities, settings tabs, pricing→Dodo checkout, and re-login all work. The single remaining critical risk is the Supabase 'profiles' table missing — visible only in console as 400 PGRST200. Once profiles is added (or joins are removed), test: (1) create decision from opportunity → appears in /app/decisions, (2) create launch from decision → appears in /app/launches, (3) submit Day-7/Day-30 review → triggers proof-summary, (4) Generate Memo in Artifact Studio → renders markdown, (5) Assistant 'Show top 3 opportunities' → returns markdown, (6) Settings → Team invite member, (7) Settings → Billing 'Upgrade to Starter' → Dodo checkout. Use existing test user above. Console will still show ~16 errors per session, mostly PGRST200 + 1 403; noisy but non-blocking.",
+  "rca of the issue": "Root cause: Supabase 'profiles' table or view does not exist in the public schema. The frontend codebase assumes a profiles table FK-linked to decisions.author_id, artifacts.author_id, workspace_members.user_id, and activity_log.user_id, but Supabase schema cache reports no such relationship. Reproduction: (1) login with test user, (2) open browser console, (3) navigate to /app/decisions or /app/artifacts → observe 400 GET /rest/v1/decisions?select=*%2Cprofiles%21author_id%28full_name%29 with body {code: 'PGRST200', hint: 'Perhaps you meant problems instead of profiles', message: \"Could not find a relationship between 'decisions' and 'profiles'\"}. Mitigation: see action_items[0]."
+}

@@ -1,0 +1,47 @@
+{
+  "summary": "Iteration 3 verifies the 4 PGRST200 FK fixes from iteration 2 — all are now CONFIRMED FIXED (decisions, artifacts, workspace_members, activity_logs joins all return HTTP 200 against Supabase REST). However, full E2E of new flows (create decision → memo → launch → verdict) was BLOCKED by two newly-discovered issues: (a) onboarding step-1 auto-redirects to /app skipping the step-3 'Explore with Sample Data' page, leaving the workspace empty so /app/opportunities is blank and no decisions/launches can be created via UI; (b) the team-invite POST appears to fail silently — modal stays open after clicking 'Send Invite', and 403 errors are visible on Supabase invitations SELECT (RLS policy blocks workspace owner from reading their own pending invitations). All other flows verified: login, workspace persistence, settings tabs render, billing upgrade buttons visible, Assistant /api/ai/ask returns markdown response, no 400/PGRST errors anywhere in console.",
+  "backend_issues": {
+    "critical": [
+      {"endpoint": "POST /api/team/invite (or RLS on invitations table)", "issue": "Team invite modal stays open after submit (which only happens via the catch path in Settings.tsx:111). Either the backend endpoint is throwing 5xx, or the subsequent invitations SELECT for refetch is blocked. Visible side-effect: 4 repeated 403 GETs to /rest/v1/invitations?workspace_id=eq.<wsid>&status=eq.pending — the workspace owner cannot read their own pending invitations, so 'pending invites' list is permanently empty and modal close logic never triggers.", "priority": "HIGH"}
+    ],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "Onboarding flow", "issue": "After completing /onboarding/step-1 (workspace name + Continue), user is redirected directly to /app instead of /onboarding/step-2 or /onboarding/step-3. This skips the 'Explore with Sample Data' seed page — new users land on an empty dashboard with no opportunities/accounts/signals/problems and cannot test downstream flows (decisions, artifacts, launches). In iteration 2 the same flow correctly took user to step-3.", "selector": "/onboarding/step-1 form submit", "priority": "HIGH"},
+      {"component": "Team Invite modal (Settings.tsx)", "issue": "Invite Member modal does NOT close after clicking 'Send Invite'. The handleSendInvite function calls setIsInviteModalOpen(false) only on success path; if api.team.invite() throws, modal stays open. The persisted-open modal then blocks all subsequent sidebar clicks via its backdrop overlay, breaking test automation and likely real-user navigation when the invite fails.", "selector": "[role='dialog'] backdrop", "priority": "HIGH"}
+    ],
+    "integration_issues": [
+      {"flow": "Settings → Team → pending invites list", "issue": "Supabase REST returns 403 Forbidden on GET /rest/v1/invitations?workspace_id=eq.<wsid>&status=eq.pending. RLS policy on public.invitations is missing (or wrong) for SELECT by workspace owner. Users will never see their own pending invitations.", "affected_selectors": ["Settings → Team tab pending invites list"]},
+      {"flow": "Onboarding → workspace seed", "issue": "Sample data seeding never executes for a fresh signup because step-3 is skipped. Without sample data, /app/opportunities is empty → 'Create Decision' CTA is unreachable → /app/decisions, /app/artifacts, /app/launches flows cannot be exercised via UI. Recommend: ensure step-1 → step-2 → step-3 sequence is intact, OR add a 'Seed sample data' button on the empty Dashboard / Opportunities page.", "affected_selectors": ["/onboarding/step-3"]}
+    ],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/test_reports/iteration_3.json"
+  ],
+  "action_items": [
+    "HIGH: Fix RLS on public.invitations to allow workspace owners/admins to SELECT rows where workspace_id matches one of their workspace_members.workspace_id. Currently returns 403 to any read.",
+    "HIGH: Investigate /api/team/invite — modal stays open suggesting POST throws (could be backend exception, Resend email failure, or RLS INSERT block on invitations table). Add backend logs for /api/team/invite calls.",
+    "HIGH: Fix onboarding redirect — step-1 submit should go to step-2/step-3, NOT directly to /app. Without sample seeding, full E2E of decisions/launches/artifacts cannot be verified end-to-end.",
+    "MEDIUM: Modal close logic in Settings.tsx handleSendInvite should call setIsInviteModalOpen(false) in the finally block (or on both success and error paths after toast) to prevent the backdrop from blocking the rest of the UI when invite fails.",
+    "LOW: Add a 'Generate Sample Data' button on the empty Dashboard / Opportunities empty-state to recover from the onboarding skip."
+  ],
+  "critical_code_review_comments": [
+    "Settings.tsx:95-115 — handleSendInvite closes modal only on success; on catch the modal remains mounted with its fixed-position backdrop blocking all interaction. Move setIsInviteModalOpen(false) into a finally block, or always close on submit and surface error via toast only.",
+    "Settings.tsx:36 — activity_logs query selector now uses profiles!actor_id(full_name) which is correct (verified HTTP 200 against Supabase). No change needed.",
+    "api.ts:171/177/184/193/199/288 — all 6 profiles!FK joins now return HTTP 200 against the live Supabase schema; FK fix from iteration 2 is verified working.",
+    "Onboarding redirect logic should be reviewed — verify step-1 NavigateNext goes to step-2 (and step-2 goes to step-3) rather than '/app'. The fast-redirect-to-/app behaviour breaks the sample-seed user-journey for fresh signups."
+  ],
+  "updated_files": [],
+  "success_rate": {
+    "backend": "100% verified for all 4 previously-failing PGRST joins; 1 new RLS issue on invitations SELECT (403)",
+    "frontend": "70% — 7 of 10 critical flows verified (login, onboarding shell, workspace persist, settings tabs, billing buttons, audit log query (empty), Assistant AI ask). 3 flows BLOCKED by upstream issues: create-decision (no opportunities to click), generate-memo (no decisions exist), create-launch+verdict (no decisions exist). Team invite flow partially verified — UI submits but modal indicates failure path."
+  },
+  "test_credentials": "test+iter3+1777196709@astrixai.app / TestPass123! — created via Supabase admin API, email_confirm=true. Workspace 'TEST_Iter3_WS' (id: 8b166132-a5a2-4bb8-8272-66bc1be000a7). NO sample data was seeded due to onboarding redirect bug.",
+  "seed_data_creation": "Attempted via UI but onboarding step-3 was skipped (step-1 redirected directly to /app). Workspace remains empty. Recommend main agent either fix the onboarding redirect, OR call POST /api/seed-sample directly with workspace_id+JWT to seed before next test run.",
+  "retest_needed": true,
+  "main_agent_can_self_test": false,
+  "context_for_next_testing_agent": "PGRST200 FK fixes are CONFIRMED working — all 4 previously-failing joins (decisions/artifacts/workspace_members/activity_logs) now return HTTP 200. Do NOT re-test those. Focus on: (1) onboarding redirect fix — step-1 → step-2 → step-3 must work; (2) team invite RLS — check 403 on invitations table SELECT; (3) full E2E once sample data can be seeded: opportunity → create decision (action=Build, rationale) → check decisions list shows author full_name → generate memo via Artifact Studio → create launch → submit Day7/Day30 reviews → submit verdict 'Solved' → verify proof_summary card. Use existing test user above (workspace already exists) OR create a new one.",
+  "rca_of_issue": "Onboarding skip: likely Step1 component now navigates('/app') after createWorkspace instead of navigate('/onboarding/step-2'). Reproduction: signup new user → enter workspace name on step-1 → click Continue → lands on /app (should land on step-2). Mitigation: review /app/frontend/src/pages/onboarding/Step1.tsx onSubmit handler.\n\nInvitations 403: public.invitations table missing RLS SELECT policy for workspace members. Reproduction: login as workspace owner → open Settings → Team tab → observe 4x repeated 403 in console for /rest/v1/invitations?workspace_id=eq.<wsid>&status=eq.pending. Mitigation: add Supabase RLS policy:\nCREATE POLICY \"members can read invitations\" ON public.invitations FOR SELECT USING (workspace_id IN (SELECT workspace_id FROM public.workspace_members WHERE user_id = auth.uid()));\n\nTeam invite modal stuck open: handleSendInvite in Settings.tsx only closes modal on success path. If api.team.invite() throws (likely due to backend error or RLS INSERT block), modal stays open with full-viewport backdrop. Fix: move setIsInviteModalOpen(false) into finally block."
+}
